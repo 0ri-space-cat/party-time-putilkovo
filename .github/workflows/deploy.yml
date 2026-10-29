@@ -21,47 +21,26 @@ jobs:
 
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      # Probes do not use any deployment secrets and do not upload files.
-      - name: Diagnose FTPS capability
-        shell: bash
-        env:
-          FTP_SERVER: ${{ secrets.FTP_SERVER }}
-        run: |
-          echo "Checking explicit FTPS on port 21 (anonymous TLS negotiation only)"
-          curl --verbose --ssl-reqd --ftp-pasv \
-            --connect-timeout 8 --max-time 15 \
-            --user "anonymous:anonymous@example.invalid" \
-            --list-only "ftp://$FTP_SERVER/" > /dev/null || true
-          echo "Checking implicit FTPS TLS handshake on port 990"
-          timeout 8 openssl s_client -brief \
-            -connect "$FTP_SERVER:990" -servername "$FTP_SERVER" \
-            < /dev/null 2>&1 || true
-
-      - name: Verify Timeweb FTPS connection
+      - name: Verify encrypted FTP connection
         shell: bash
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
         run: |
-          if [[ "$FTP_SERVER" != "vh460.timeweb.ru" ]]; then
-            echo "::error::FTP_SERVER does not match the expected Timeweb host."
+          if [[ -z "$FTP_SERVER" || -z "$FTP_USERNAME" || -z "$FTP_PASSWORD" ]]; then
+            echo "::error::One or more FTP secrets are missing."
             exit 1
           fi
-          if [[ "$FTP_USERNAME" != "cd831058_deploy" ]]; then
-            echo "::error::FTP_USERNAME does not match the restricted deployment user."
-            exit 1
-          fi
-          if [[ -z "$FTP_PASSWORD" ]]; then
-            echo "::error::FTP_PASSWORD is empty or missing."
-            exit 1
-          fi
-          curl --silent --show-error --fail --ssl-reqd --ftp-pasv \
+          if ! curl --silent --show-error --fail --ssl-reqd --ftp-pasv \
             --connect-timeout 10 --max-time 45 \
             --user "$FTP_USERNAME:$FTP_PASSWORD" \
-            --list-only "ftp://$FTP_SERVER/public_html/" > /dev/null
+            --list-only "ftp://$FTP_SERVER/public_html/" > /dev/null; then
+            echo "::error::Secure FTPS login failed. Check Timeweb FTPS/TLS availability and account permissions."
+            exit 1
+          fi
 
       - name: Deploy static files to Timeweb
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
