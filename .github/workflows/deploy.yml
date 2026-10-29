@@ -1,0 +1,53 @@
+name: Deploy website to Timeweb
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Upload site via FTPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Deploy static files to Timeweb
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          security: strict
+          local-dir: ./
+          server-dir: /public_html/
+          log-level: standard
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.github/**
+            **/node_modules/**
+            **/vendor/**
+            **/.DS_Store
+            **/*.md
+            **/package.json
+            **/package-lock.json
+            **/yarn.lock
+            **/pnpm-lock.yaml
+            **/.env
+            **/.env.*
+            **/cgi-bin/**
+            **/index.htm
