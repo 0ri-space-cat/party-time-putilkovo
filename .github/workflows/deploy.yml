@@ -23,8 +23,22 @@ jobs:
       - name: Checkout main
         uses: actions/checkout@v4
 
-      # Verify the non-password secrets and FTPS login before attempting any uploads.
-      # Keep diagnostic output free from account credentials.
+      # Probes do not use any deployment secrets and do not upload files.
+      - name: Diagnose FTPS capability
+        shell: bash
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+        run: |
+          echo "Checking explicit FTPS on port 21 (anonymous TLS negotiation only)"
+          curl --verbose --ssl-reqd --ftp-pasv \
+            --connect-timeout 8 --max-time 15 \
+            --user "anonymous:anonymous@example.invalid" \
+            --list-only "ftp://$FTP_SERVER/" > /dev/null || true
+          echo "Checking implicit FTPS TLS handshake on port 990"
+          timeout 8 openssl s_client -brief \
+            -connect "$FTP_SERVER:990" -servername "$FTP_SERVER" \
+            < /dev/null 2>&1 || true
+
       - name: Verify Timeweb FTPS connection
         shell: bash
         env:
