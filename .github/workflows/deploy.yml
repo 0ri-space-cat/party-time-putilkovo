@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Upload site via FTPS
+    name: Upload site over SSH
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -23,51 +23,77 @@ jobs:
       - name: Checkout main
         uses: actions/checkout@v6
 
-      - name: Verify encrypted FTP connection
+      - name: Prepare deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          site_dir="$RUNNER_TEMP/timeweb-site"
+          mkdir -p "$site_dir"
+          cp index.html styles.css pattern-overrides.css game-catalog.css script.js "$site_dir/"
+          cp -R assets "$site_dir/"
+          echo "Only public site files will be published."
+          find "$site_dir" -type f | wc -l
+
+      - name: Install SSH transfer tool
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass rsync >/dev/null
+
+      - name: Verify SSH connection and site directory
         shell: bash
         env:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
-          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          SSHPASS: ${{ secrets.FTP_PASSWORD }}
         run: |
-          if [[ -z "$FTP_SERVER" || -z "$FTP_USERNAME" || -z "$FTP_PASSWORD" ]]; then
-            echo "::error::One or more FTP secrets are missing."
-            exit 1
-          fi
-          if ! curl --silent --show-error --fail --ssl-reqd --ftp-pasv \
-            --connect-timeout 10 --max-time 45 \
-            --user "$FTP_USERNAME:$FTP_PASSWORD" \
-            --list-only "ftp://$FTP_SERVER/public_html/" > /dev/null; then
-            echo "::error::Secure FTPS login failed. Check Timeweb FTPS/TLS availability and account permissions."
+          set -euo pipefail
+          if [[ "$FTP_SERVER" != "vh460.timeweb.ru" || "$FTP_USERNAME" != "cd831058" || -z "$SSHPASS" ]]; then
+            echo "::error::Expected Timeweb host or primary account credentials are missing or incorrect."
             exit 1
           fi
 
-      - name: Deploy static files to Timeweb
-        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          port: 21
-          security: strict
-          local-dir: ./
-          server-dir: /public_html/
-          log-level: standard
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/.github/**
-            **/node_modules/**
-            **/vendor/**
-            **/.DS_Store
-            **/*.md
-            **/package.json
-            **/package-lock.json
-            **/yarn.lock
-            **/pnpm-lock.yaml
-            **/.env
-            **/.env.*
-            **/cgi-bin
-            **/cgi-bin/**
-            **/index.htm
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -4 -T 10 -p 22 -t ed25519,rsa "$FTP_SERVER" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          test -s "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=yes \
+            -o PreferredAuthentications=password,keyboard-interactive \
+            -o PubkeyAuthentication=no \
+            -o ConnectTimeout=15 \
+            -p 22 \
+            "$FTP_USERNAME@$FTP_SERVER" \
+            'test -d "$HOME/party-time/public_html" && echo "Target directory verified: party-time/public_html"'
+
+      - name: Deploy changed site files via rsync over SSH
+        shell: bash
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          SSHPASS: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e rsync -rvc --stats \
+            -e "ssh -o StrictHostKeyChecking=yes -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no -o ConnectTimeout=15 -p 22" \
+            "$RUNNER_TEMP/timeweb-site/" \
+            "$FTP_USERNAME@$FTP_SERVER:party-time/public_html/"
+
+      - name: Verify uploaded index.html
+        shell: bash
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          SSHPASS: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=yes \
+            -o PreferredAuthentications=password,keyboard-interactive \
+            -o PubkeyAuthentication=no \
+            -o ConnectTimeout=15 \
+            -p 22 \
+            "$FTP_USERNAME@$FTP_SERVER" \
+            'test -s "$HOME/party-time/public_html/index.html" && echo "Uploaded index.html exists"'
